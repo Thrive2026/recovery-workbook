@@ -156,6 +156,17 @@
   .track-card.co .ic{background:var(--co-bg);}
   .track-card h4{font-size:16px; margin-bottom:6px;}
   .track-card p{font-size:13px; color:var(--ink-soft); margin:0;}
+  .section-label{font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); margin:28px 0 10px; display:flex; align-items:center; gap:10px;}
+  .section-label::after{content:''; flex:1; height:1px; background:var(--line);}
+  .tool-grid{display:grid; grid-template-columns:1fr; gap:10px;}
+  @media(min-width:640px){.tool-grid{grid-template-columns:repeat(3,1fr);}}
+  .tool-card{display:flex; align-items:flex-start; gap:12px; border:1.5px solid var(--line); border-radius:12px; padding:12px 14px; cursor:pointer; background:var(--panel); transition:border-color .15s, transform .1s;}
+  .tool-card:hover{border-color:var(--ink); transform:translateY(-1px);}
+  .tool-card .ic{width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0;}
+  .tool-card .tool-body{flex:1; min-width:0;}
+  .tool-card .tool-body h5{font-size:13.5px; margin:0 0 3px; line-height:1.3;}
+  .tool-card .tool-body p{font-size:12px; color:var(--ink-soft); margin:0; line-height:1.35;}
+  .tool-card .tool-check{display:block; font-size:11px; font-weight:700; color:var(--good); margin-top:4px;}
 
   /* ---------- workbook layout ---------- */
   .wb-layout{display:flex; gap:22px; align-items:flex-start;}
@@ -1229,53 +1240,33 @@ function renderTrackPicker(){
         ${trackCardHTML(TRACKS.mh, started.includes('mh'))}
         ${trackCardHTML(TRACKS.comorbid, started.includes('comorbid'))}
       </div>
-      <div class="track-grid" style="margin-top:14px;">
-        <div class="track-card res" onclick="openResources()">
-          <div class="ic" style="background:var(--l2-bg);">📋</div>
-          <h4>My Resources &amp; My People</h4>
-          <p>Local help lines — food, housing, safety, crisis — plus a list of people to call.</p>
-          ${started.includes('resources') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
-        </div>
-        <div class="track-card care" onclick="openCareTeam()">
-          <div class="ic" style="background:var(--mh-bg);">🩺</div>
-          <h4>My Care Team</h4>
-          <p>Primary care, psychiatrist, therapist, pharmacy — everyone on the medical side.</p>
-          ${started.includes('careteam') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
-        </div>
-      </div>
-      <div class="track-grid" style="margin-top:14px;">
-        <div class="track-card" onclick="openCheckin()">
-          <div class="ic" style="background:var(--sud-bg);">📊</div>
-          <h4>Weekly Check-In</h4>
-          <p>A quick weekly check on appointments, meds, and staying out of the ER.</p>
-          ${started.includes('checkin') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
-        </div>
-        <div class="track-card co" onclick="openVisitPrepTool()">
-          <div class="ic" style="background:var(--co-bg);">📋</div>
-          <h4>Visit Prep</h4>
-          <p>Get ready for a PCP or psychiatry visit — questions to ask, and what's happened lately.</p>
-          ${started.includes('visitprep') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
-        </div>
-      </div>
-      <div class="track-grid" style="margin-top:14px;">
-        <div class="track-card" onclick="openToolbox()">
-          <div class="ic" style="background:var(--l1-bg);">🧰</div>
-          <h4>Coping Skills Toolbox</h4>
-          <p>A running list of what actually helps — plus a breathing exercise, always here.</p>
-          ${started.includes('toolbox') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
-        </div>
-        <div class="track-card mh" onclick="openExposure()">
-          <div class="ic" style="background:var(--mh-bg);">🪜</div>
-          <h4>Anxiety Ladder</h4>
-          <p>Build a list of things that make you anxious, easiest to hardest, and face them a step at a time.</p>
-          ${started.includes('exposure') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
-        </div>
+
+      <div class="section-label">Add-on tools</div>
+      <div class="tool-grid">
+        ${toolCardHTML({ icon:'📋', bg:'var(--l2-bg)', title:'My Resources &amp; My People', desc:'Local help lines — food, housing, safety, crisis — plus a list of people to call.', onclick:'openResources()', done:started.includes('resources') })}
+        ${toolCardHTML({ icon:'🩺', bg:'var(--mh-bg)', title:'My Care Team', desc:'Primary care, psychiatrist, therapist, pharmacy — everyone on the medical side.', onclick:'openCareTeam()', done:started.includes('careteam') })}
+        ${toolCardHTML({ icon:'📊', bg:'var(--sud-bg)', title:'Weekly Check-In', desc:'A quick weekly check on appointments, meds, and staying out of the ER.', onclick:'openCheckin()', done:started.includes('checkin') })}
+        ${toolCardHTML({ icon:'📋', bg:'var(--co-bg)', title:'Visit Prep', desc:"Get ready for a PCP or psychiatry visit — questions to ask, and what's happened lately.", onclick:'openVisitPrepTool()', done:started.includes('visitprep') })}
+        ${toolCardHTML({ icon:'🧰', bg:'var(--l1-bg)', title:'Coping Skills Toolbox', desc:'A running list of what actually helps — plus a breathing exercise, always here.', onclick:'openToolbox()', done:started.includes('toolbox') })}
+        ${toolCardHTML({ icon:'🪜', bg:'var(--mh-bg)', title:'Anxiety Ladder', desc:'Build a list of things that make you anxious, easiest to hardest, and face them a step at a time.', onclick:'openExposure()', done:started.includes('exposure') })}
       </div>
       ${isProvider ? `<div id="access-panel">${accessPanelLoadingHTML()}</div>` : ''}
     </div>
     ${siteFooterHTML()}`;
 
   if (isProvider) loadAndRenderAccessPanel(client.id);
+}
+
+function toolCardHTML({ icon, bg, title, desc, onclick, done }){
+  return `
+    <div class="tool-card" onclick="${onclick}">
+      <div class="ic" style="background:${bg};">${icon}</div>
+      <div class="tool-body">
+        <h5>${title}</h5>
+        <p>${desc}</p>
+        ${done ? '<span class="tool-check">✓ Set up — tap to view</span>' : ''}
+      </div>
+    </div>`;
 }
 
 function accessPanelLoadingHTML(){
