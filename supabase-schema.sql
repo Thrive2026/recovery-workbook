@@ -174,11 +174,12 @@ create policy "cpa_delete_scoped" on client_provider_access
 
 
 -- 6. WORKBOOK PROGRESS ---------------------------------------------------------
--- One row per client per track (sud / mh / comorbid / resources / careteam).
+-- One row per client per track (sud / mh / comorbid / resources / careteam /
+-- checkin / visitprep).
 create table if not exists workbook_progress (
   id uuid primary key default gen_random_uuid(),
   client_id uuid not null references clients(id) on delete cascade,
-  track text not null check (track in ('sud','mh','comorbid','resources','careteam')),
+  track text not null check (track in ('sud','mh','comorbid','resources','careteam','checkin','visitprep','toolbox','exposure')),
   data jsonb not null default '{}'::jsonb,
   total_prompts integer not null default 0,
   completed_prompts integer not null default 0,
@@ -349,7 +350,7 @@ alter table clients add column if not exists county text;
 
 alter table workbook_progress drop constraint if exists workbook_progress_track_check;
 alter table workbook_progress add constraint workbook_progress_track_check
-  check (track in ('sud','mh','comorbid','resources','careteam'));
+  check (track in ('sud','mh','comorbid','resources','careteam','checkin','visitprep','toolbox','exposure'));
 
 alter table providers add column if not exists email text;
 
@@ -415,4 +416,29 @@ grant select, insert, update, delete on public.client_provider_access to authent
 grant select, insert, update, delete on public.workbook_progress to authenticated;
 grant execute on function is_registered_provider() to authenticated;
 grant execute on function public.has_client_access(uuid) to authenticated;
+*/
+
+
+-- =========================================================================
+-- ADDING WEEKLY CHECK-IN & VISIT PREP (August 2026)
+-- =========================================================================
+-- If you already ran the schema above (with or without the V1 upgrade block)
+-- and just need to allow the two newest tools — Weekly Check-In and Visit
+-- Prep — run only this:
+/*
+alter table workbook_progress drop constraint if exists workbook_progress_track_check;
+alter table workbook_progress add constraint workbook_progress_track_check
+  check (track in ('sud','mh','comorbid','resources','careteam','checkin','visitprep'));
+*/
+
+
+-- =========================================================================
+-- ADDING COPING SKILLS TOOLBOX & ANXIETY LADDER (August 2026)
+-- =========================================================================
+-- If you're already past the Weekly Check-In / Visit Prep migration above
+-- and just need to allow these two newest tools, run only this:
+/*
+alter table workbook_progress drop constraint if exists workbook_progress_track_check;
+alter table workbook_progress add constraint workbook_progress_track_check
+  check (track in ('sud','mh','comorbid','resources','careteam','checkin','visitprep','toolbox','exposure'));
 */
