@@ -255,6 +255,13 @@
   .care-row select{width:100%; padding:9px 10px; border:1.5px solid var(--line); border-radius:8px; font-family:inherit; font-size:13.5px; background:#fdfdfc; color:var(--ink);}
   .care-row select:focus{outline:none; border-color:var(--ink);}
   .care-row .remove-person{grid-column:1 / -1; justify-self:flex-end; background:none; border:none; color:var(--ink-soft); font-size:12px; cursor:pointer; text-decoration:underline; padding:2px;}
+  .thennow-grid{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media(max-width:640px){.thennow-grid{grid-template-columns:1fr;}}
+  @keyframes breatheScale{
+    0%{transform:scale(.6);} 25%{transform:scale(1);} 50%{transform:scale(1);} 75%{transform:scale(.6);} 100%{transform:scale(.6);}
+  }
+  .breathe-circle{width:120px; height:120px; border-radius:50%; background:var(--sud-bg); border:2px solid var(--sud); margin:14px auto; animation:breatheScale 16s ease-in-out infinite;}
+  .breathe-label{font-weight:700; color:var(--sud); font-size:13px; text-align:center; margin-top:6px;}
   @media print{
     .topbar,.crisis-strip,.wb-sidebar,.wb-tools,.chapter-footer,.chapter-nav{display:none !important;}
     body{padding:0;}
@@ -724,8 +731,11 @@ const STATE = {
   providerEmail: '',
   clients: [],
   currentClient: null,   // {id, full_name, ...}
-  currentTrackKey: null, // 'sud' | 'mh' | 'comorbid' | 'resources' | 'careteam'
+  currentTrackKey: null, // 'sud' | 'mh' | 'comorbid' | 'resources' | 'careteam' | 'checkin' | 'visitprep' | 'toolbox' | 'exposure'
   currentChapterIdx: 0,
+  currentVisitId: null,  // which visit is open within the Visit Prep tool
+  checkinCache: [],      // Weekly Check-In entries, fetched separately for Visit Prep's Care Snapshot
+  wbTool: null,          // null | 'thennow' | 'letter' — a tool view layered inside sud/mh/comorbid workbooks
   formData: {},          // { [chapterId]: { [promptId]: value } }
   saveTimer: null,
   saveState: 'idle',     // idle | saving | saved
@@ -842,6 +852,11 @@ function topbarHTML(opts){
 }
 
 function render(){
+  // Any page can leave the breathing widget's interval running behind it —
+  // clearing it here, on every render, guarantees it never leaks regardless
+  // of which button/link the person used to navigate away.
+  stopBreathing();
+
   if (!CONFIGURED){
     renderConfigWarning();
     return;
@@ -855,6 +870,12 @@ function render(){
     if (!STATE.currentTrackKey) renderTrackPicker();
     else if (STATE.currentTrackKey === 'resources') renderResourcesPage();
     else if (STATE.currentTrackKey === 'careteam') renderCareTeamPage();
+    else if (STATE.currentTrackKey === 'checkin') renderCheckinPage();
+    else if (STATE.currentTrackKey === 'visitprep') renderVisitPrepPage();
+    else if (STATE.currentTrackKey === 'toolbox') renderToolboxPage();
+    else if (STATE.currentTrackKey === 'exposure') renderExposurePage();
+    else if (STATE.wbTool === 'thennow') renderThenNowPage();
+    else if (STATE.wbTool === 'letter') renderLetterPage();
     else renderWorkbook();
     return;
   }
@@ -866,6 +887,18 @@ function render(){
     renderResourcesPage();
   } else if (STATE.currentTrackKey === 'careteam'){
     renderCareTeamPage();
+  } else if (STATE.currentTrackKey === 'checkin'){
+    renderCheckinPage();
+  } else if (STATE.currentTrackKey === 'visitprep'){
+    renderVisitPrepPage();
+  } else if (STATE.currentTrackKey === 'toolbox'){
+    renderToolboxPage();
+  } else if (STATE.currentTrackKey === 'exposure'){
+    renderExposurePage();
+  } else if (STATE.wbTool === 'thennow'){
+    renderThenNowPage();
+  } else if (STATE.wbTool === 'letter'){
+    renderLetterPage();
   } else {
     renderWorkbook();
   }
@@ -891,6 +924,8 @@ function renderConfigWarning(){
 function goToDashboard(){
   STATE.currentTrackKey = null;
   STATE.currentChapterIdx = 0;
+  STATE.currentVisitId = null;
+  STATE.wbTool = null;
   if (STATE.viewerRole !== 'client'){
     STATE.currentClient = null;
   }
@@ -1038,6 +1073,21 @@ function trackPillsForClient(client){
   return progress.map(p => {
     if (p.track === 'resources'){
       return `<span class="pill" style="background:var(--l2-bg); color:#7a5a12;">📋 Resources</span>`;
+    }
+    if (p.track === 'careteam'){
+      return `<span class="pill" style="background:var(--mh-bg); color:var(--mh);">🩺 Care Team</span>`;
+    }
+    if (p.track === 'checkin'){
+      return `<span class="pill" style="background:var(--sud-bg); color:var(--sud);">📊 Check-In</span>`;
+    }
+    if (p.track === 'visitprep'){
+      return `<span class="pill" style="background:var(--co-bg); color:var(--co);">📋 Visit Prep</span>`;
+    }
+    if (p.track === 'toolbox'){
+      return `<span class="pill" style="background:var(--l1-bg); color:var(--l1);">🧰 Toolbox</span>`;
+    }
+    if (p.track === 'exposure'){
+      return `<span class="pill" style="background:var(--mh-bg); color:var(--mh);">🪜 Anxiety Ladder</span>`;
     }
     const t = TRACKS[p.track];
     if (!t) return '';
@@ -1193,6 +1243,34 @@ function renderTrackPicker(){
           ${started.includes('careteam') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
         </div>
       </div>
+      <div class="track-grid" style="margin-top:14px;">
+        <div class="track-card" onclick="openCheckin()">
+          <div class="ic" style="background:var(--sud-bg);">📊</div>
+          <h4>Weekly Check-In</h4>
+          <p>A quick weekly check on appointments, meds, and staying out of the ER.</p>
+          ${started.includes('checkin') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
+        </div>
+        <div class="track-card co" onclick="openVisitPrepTool()">
+          <div class="ic" style="background:var(--co-bg);">📋</div>
+          <h4>Visit Prep</h4>
+          <p>Get ready for a PCP or psychiatry visit — questions to ask, and what's happened lately.</p>
+          ${started.includes('visitprep') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
+        </div>
+      </div>
+      <div class="track-grid" style="margin-top:14px;">
+        <div class="track-card" onclick="openToolbox()">
+          <div class="ic" style="background:var(--l1-bg);">🧰</div>
+          <h4>Coping Skills Toolbox</h4>
+          <p>A running list of what actually helps — plus a breathing exercise, always here.</p>
+          ${started.includes('toolbox') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
+        </div>
+        <div class="track-card mh" onclick="openExposure()">
+          <div class="ic" style="background:var(--mh-bg);">🪜</div>
+          <h4>Anxiety Ladder</h4>
+          <p>Build a list of things that make you anxious, easiest to hardest, and face them a step at a time.</p>
+          ${started.includes('exposure') ? '<p style="margin-top:10px; font-weight:700; color:var(--good);">✓ Set up — tap to view</p>' : ''}
+        </div>
+      </div>
       ${isProvider ? `<div id="access-panel">${accessPanelLoadingHTML()}</div>` : ''}
     </div>
     ${siteFooterHTML()}`;
@@ -1223,6 +1301,7 @@ function trackCardHTML(track, started){
 async function openTrack(trackKey){
   STATE.currentTrackKey = trackKey;
   STATE.currentChapterIdx = 0;
+  STATE.wbTool = null;
   await loadProgress();
   render();
 }
@@ -1391,6 +1470,63 @@ async function openResources(){
 async function openCareTeam(){
   STATE.currentTrackKey = 'careteam';
   await loadProgress();
+  render();
+}
+
+async function openCheckin(){
+  STATE.currentTrackKey = 'checkin';
+  await loadProgress();
+  render();
+}
+
+async function openVisitPrepTool(){
+  STATE.currentTrackKey = 'visitprep';
+  STATE.currentVisitId = null;
+  await loadProgress();
+  await refreshCheckinCache();
+  render();
+}
+
+// Visit Prep's Care Snapshot reads Weekly Check-In data directly, since the
+// two live as separate workbook_progress rows (separate "track" values) for
+// the same client — same pattern resources/careteam already use.
+async function refreshCheckinCache(){
+  const { data, error } = await sb
+    .from('workbook_progress')
+    .select('data')
+    .eq('client_id', STATE.currentClient.id)
+    .eq('track', 'checkin')
+    .maybeSingle();
+  STATE.checkinCache = (!error && data && data.data && data.data.entries) ? data.data.entries : [];
+}
+
+async function openToolbox(){
+  STATE.currentTrackKey = 'toolbox';
+  await loadProgress();
+  render();
+}
+
+async function openExposure(){
+  STATE.currentTrackKey = 'exposure';
+  await loadProgress();
+  render();
+}
+
+// Then & Now and the Letter live inside whichever track is already open —
+// they read/write the same workbook_progress row as the chapters, just
+// under different formData keys. No track switch, just a view switch.
+function openThenNow(){
+  STATE.wbTool = 'thennow';
+  render();
+}
+
+function openLetter(){
+  STATE.wbTool = 'letter';
+  render();
+}
+
+function closeWbTool(){
+  STATE.wbTool = null;
   render();
 }
 </script>
@@ -1706,6 +1842,869 @@ function renderCareTeamPage(){
 </script>
 <script>
 /* =========================================================================
+   WEEKLY CHECK-IN — a lightweight, ongoing tracker separate from the chapter
+   content. Each entry is one week's worth of yes/no items chosen because
+   they map to things that drive avoidable cost (ER/inpatient use, med
+   non-adherence, housing instability) so the program has real data behind
+   the "peer support reduces utilization" story. Visit Prep reads this same
+   data to auto-fill its Care Snapshot.
+   ========================================================================= */
+const CHECKIN_ITEMS = [
+  { id:'appt_kept',      label:'Went to a scheduled appointment this week (PCP, psychiatry, therapy, etc.)' },
+  { id:'meds_taken',     label:'Took medication as prescribed' },
+  { id:'coping_used',    label:'Used a coping skill instead of going to the ER or calling 911' },
+  { id:'warmline_used',  label:'Called the Warmline or a crisis line instead of a higher level of care' },
+  { id:'housing_stable', label:'Stayed in stable housing this week' },
+  { id:'connected',      label:'Connected with someone in my support network' }
+];
+
+function ensureCheckinShape(){
+  if (!STATE.formData.entries) STATE.formData.entries = [];
+}
+
+function newCheckinId(){ return 'wk_' + Date.now() + '_' + Math.floor(Math.random()*1000); }
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+function addCheckinEntry(){
+  ensureCheckinShape();
+  STATE.formData.entries.unshift({ id:newCheckinId(), date:todayISO(), checks:{}, note:'' });
+  queueSave();
+  renderCheckinPage();
+}
+
+function removeCheckinEntry(eid){
+  ensureCheckinShape();
+  STATE.formData.entries = STATE.formData.entries.filter(e => e.id !== eid);
+  queueSave();
+  renderCheckinPage();
+}
+
+function setCheckinField(eid, field, value){
+  ensureCheckinShape();
+  const entry = STATE.formData.entries.find(e => e.id === eid);
+  if (!entry) return;
+  entry[field] = value;
+  queueSave();
+}
+
+function setCheckinCheck(eid, itemId, checked){
+  ensureCheckinShape();
+  const entry = STATE.formData.entries.find(e => e.id === eid);
+  if (!entry) return;
+  if (!entry.checks) entry.checks = {};
+  entry.checks[itemId] = checked;
+  queueSave();
+}
+
+// Shared by the Check-In page's own summary and the Visit Prep auto-pull.
+function summarizeCheckinEntries(entries, days){
+  entries = entries || [];
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const inWindow = entries.filter(e => e.date && new Date(e.date) >= cutoff);
+  const n = inWindow.length;
+  const pctFor = key => n ? Math.round(100 * inWindow.filter(e => e.checks && e.checks[key]).length / n) : null;
+  const out = { n, days };
+  CHECKIN_ITEMS.forEach(item => { out[item.id] = pctFor(item.id); });
+  return out;
+}
+
+function checkinStatLineHTML(summary){
+  if (!summary.n){
+    return `<p style="font-size:13.5px; color:var(--ink-soft); margin:0;">No check-ins logged in the last ${summary.days} days yet.</p>`;
+  }
+  return `
+    <p style="font-size:12px; color:var(--ink-soft); margin:0 0 10px;">Based on ${summary.n} check-in${summary.n === 1 ? '' : 's'} in the last ${summary.days} days.</p>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:10px;">
+      ${CHECKIN_ITEMS.map(item => `
+        <div style="background:var(--paper); border-radius:10px; padding:10px 12px;">
+          <div style="font-size:20px; font-weight:800; color:var(--ink);">${summary[item.id] === null ? '—' : summary[item.id] + '%'}</div>
+          <div style="font-size:11.5px; color:var(--ink-soft); margin-top:2px; line-height:1.35;">${esc(item.label)}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function renderCheckinEntries(){
+  ensureCheckinShape();
+  if (!STATE.formData.entries.length){
+    return `<p style="color:var(--ink-soft); font-size:13.5px; margin:0;">No check-ins yet — tap "+ Add this week's check-in" to start.</p>`;
+  }
+  return STATE.formData.entries.map(e => `
+    <div class="res-card" style="margin-bottom:14px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px; flex-wrap:wrap;">
+        <input class="answer" type="date" style="max-width:170px;" data-role="checkin-field" data-eid="${e.id}" data-field="date" value="${esc(e.date || '')}">
+        <div style="flex:1;"></div>
+        <button class="remove-person" onclick="removeCheckinEntry('${e.id}')" type="button">Remove</button>
+      </div>
+      ${CHECKIN_ITEMS.map(item => `
+        <div class="checklist-item">
+          <input type="checkbox" id="ci-${e.id}-${item.id}" data-role="checkin-check" data-eid="${e.id}" data-item="${item.id}" ${e.checks && e.checks[item.id] ? 'checked' : ''}>
+          <label for="ci-${e.id}-${item.id}">${esc(item.label)}</label>
+        </div>`).join('')}
+      <textarea class="answer" style="margin-top:10px;" placeholder="Anything else worth noting this week?" data-role="checkin-field" data-eid="${e.id}" data-field="note">${esc(e.note || '')}</textarea>
+    </div>`).join('');
+}
+
+function renderCheckinPage(){
+  ensureCheckinShape();
+  const client = STATE.currentClient;
+  const summary4wk = summarizeCheckinEntries(STATE.formData.entries, 28);
+  app.innerHTML = `
+    ${topbarHTML({ showSave: true, crumb: `${client.full_name} · Weekly Check-In` })}
+    <div class="wrap">
+      <button class="btn btn-ghost btn-sm" onclick="backToTrackPicker()">← ${STATE.viewerRole === 'client' ? 'Back' : esc(client.full_name) + "'s workbooks"}</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>Weekly Check-In</h1>
+        </div>
+      </div>
+      <p style="color:var(--ink-soft); font-size:14.5px; margin:-8px 0 18px;">A quick check-in, once a week, on the things that matter most for staying well and staying out of the hospital or ER. Takes a minute. Builds a real record over time.</p>
+
+      <div class="res-card" style="border-color:var(--ink);">
+        <div class="res-card-cat">Last 4 weeks</div>
+        ${checkinStatLineHTML(summary4wk)}
+      </div>
+
+      <button class="add-person-btn" style="margin-bottom:16px;" onclick="addCheckinEntry()" type="button">+ Add this week's check-in</button>
+
+      ${renderCheckinEntries()}
+    </div>
+    ${siteFooterHTML()}`;
+}
+</script>
+<script>
+/* =========================================================================
+   VISIT PREP — helps a client walk into a PCP or psychiatry appointment
+   ready: questions to ask, a snapshot of how the last couple weeks have
+   gone (pulled from Weekly Check-In), and a place to capture what actually
+   happened so the loop closes and the next check-in / visit builds on it.
+   ========================================================================= */
+const VISIT_TYPES = [
+  { key:'pcp',        label:'Primary Care',        icon:'🩺' },
+  { key:'psychiatry', label:'Psychiatry',          icon:'🧠' },
+  { key:'therapist',  label:'Therapist / Counselor', icon:'💬' },
+  { key:'other',      label:'Other appointment',   icon:'📋' }
+];
+
+const VISIT_QUESTION_BANKS = {
+  pcp: [
+    'Can we check my blood pressure and weight today?',
+    'I\'ve been having a symptom that\'s worrying me — could that be related to my medication?',
+    'Can we do bloodwork to check on my overall health?',
+    'Is it safe to take my mental health medication with what you\'re prescribing?',
+    'Can you refer me to a specialist for this?',
+    'Can we talk about my sleep? I\'ve been having trouble.',
+    'Is there anything I should be doing differently with my diet or exercise?',
+    'Can I get a copy of my visit summary today?'
+  ],
+  psychiatry: [
+    'Since my last visit, I\'ve noticed a change — is that normal?',
+    'I\'ve been having side effects — should we adjust anything?',
+    'Is my current dose still the right one for me?',
+    'How long should it take before I notice this medication working?',
+    'What should I do if I miss a dose?',
+    'Can we talk about how my sleep has been?',
+    'Does it change anything that I\'ve missed some doses recently?',
+    'What are the warning signs I should watch for before my next visit?'
+  ],
+  therapist: [
+    'Can we spend time today on something specific that\'s been hard?',
+    'What can I practice between now and our next session?',
+    'I tried the skill we talked about last time — can we talk about how it went?',
+    'Is what I\'m feeling normal for where I\'m at in recovery?'
+  ],
+  other: []
+};
+
+function ensureVisitPrepShape(){
+  if (!STATE.formData.visits) STATE.formData.visits = [];
+}
+
+function newVisitId(){ return 'v_' + Date.now() + '_' + Math.floor(Math.random()*1000); }
+
+function visitTypeInfo(key){ return VISIT_TYPES.find(t => t.key === key) || VISIT_TYPES[3]; }
+
+function addVisit(typeKey){
+  ensureVisitPrepShape();
+  const v = { id:newVisitId(), type:typeKey, date:'', status:'upcoming', questions:[], prep_notes:'',
+    summary_what_said:'', summary_changes:'', summary_followup_date:'', summary_notes:'' };
+  STATE.formData.visits.unshift(v);
+  queueSave();
+  STATE.currentVisitId = v.id;
+  render();
+}
+
+function removeVisit(vid){
+  ensureVisitPrepShape();
+  STATE.formData.visits = STATE.formData.visits.filter(v => v.id !== vid);
+  queueSave();
+  STATE.currentVisitId = null;
+  render();
+}
+
+function openVisit(vid){ STATE.currentVisitId = vid; render(); }
+function backToVisitList(){ STATE.currentVisitId = null; render(); }
+
+function getCurrentVisit(){
+  ensureVisitPrepShape();
+  return STATE.formData.visits.find(v => v.id === STATE.currentVisitId);
+}
+
+function setVisitField(vid, field, value){
+  const v = STATE.formData.visits.find(v => v.id === vid);
+  if (!v) return;
+  v[field] = value;
+  queueSave();
+}
+
+function setVisitStatus(vid, status){
+  setVisitField(vid, 'status', status);
+  render();
+}
+
+function addVisitQuestion(vid, text){
+  const v = STATE.formData.visits.find(v => v.id === vid);
+  if (!v || !text || !text.trim()) return;
+  if (!v.questions) v.questions = [];
+  v.questions.push({ id:'q_' + Date.now() + '_' + Math.floor(Math.random()*1000), text:text.trim(), asked:false });
+  queueSave();
+  refreshVisitQuestionsUI();
+}
+
+function addVisitQuestionFromBank(vid, idx){
+  const v = STATE.formData.visits.find(v => v.id === vid);
+  const bank = VISIT_QUESTION_BANKS[v.type] || [];
+  addVisitQuestion(vid, bank[idx]);
+}
+
+function addCustomVisitQuestion(vid){
+  const input = document.getElementById('custom-q-input');
+  if (!input) return;
+  addVisitQuestion(vid, input.value);
+  input.value = '';
+}
+
+function removeVisitQuestion(vid, qid){
+  const v = STATE.formData.visits.find(v => v.id === vid);
+  if (!v) return;
+  v.questions = (v.questions || []).filter(q => q.id !== qid);
+  queueSave();
+  refreshVisitQuestionsUI();
+}
+
+function setVisitQuestionText(vid, qid, text){
+  const v = STATE.formData.visits.find(v => v.id === vid);
+  const q = v && (v.questions || []).find(q => q.id === qid);
+  if (q) q.text = text;
+  queueSave();
+}
+
+function toggleVisitQuestionAsked(vid, qid, checked){
+  const v = STATE.formData.visits.find(v => v.id === vid);
+  const q = v && (v.questions || []).find(q => q.id === qid);
+  if (q) q.asked = checked;
+  queueSave();
+}
+
+function refreshVisitQuestionsUI(){
+  const host = document.getElementById('visit-q-section');
+  const v = getCurrentVisit();
+  if (host && v) host.innerHTML = renderVisitQuestionsSection(v);
+}
+
+function renderVisitQuestionsSection(v){
+  const bank = VISIT_QUESTION_BANKS[v.type] || [];
+  const already = (v.questions || []).map(q => q.text);
+  const bankButtons = bank.filter(q => !already.includes(q)).map((q, i) => {
+    // i must map back to the original bank index for addVisitQuestionFromBank
+    const origIdx = bank.indexOf(q);
+    return `<button class="btn btn-ghost btn-sm" style="text-align:left; height:auto; white-space:normal;" onclick="addVisitQuestionFromBank('${v.id}', ${origIdx})">+ ${esc(q)}</button>`;
+  }).join('');
+
+  const questionRows = (v.questions || []).map(q => `
+    <div class="res-item">
+      <input type="checkbox" title="Asked at the visit" data-role="visit-q-check" data-vid="${v.id}" data-qid="${q.id}" ${q.asked ? 'checked' : ''}>
+      <div class="res-item-main">
+        <textarea class="answer" style="min-height:44px;" data-role="visit-q-text" data-vid="${v.id}" data-qid="${q.id}">${esc(q.text)}</textarea>
+      </div>
+      <button class="remove-person" onclick="removeVisitQuestion('${v.id}','${q.id}')" type="button">Remove</button>
+    </div>`).join('');
+
+  return `
+    ${bankButtons ? `
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px; font-weight:700; color:var(--ink-soft); margin-bottom:8px;">Tap to add a starter question</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">${bankButtons}</div>
+      </div>` : ''}
+    <div style="display:flex; gap:8px; margin-bottom:12px;">
+      <input class="answer" id="custom-q-input" type="text" placeholder="Write your own question…">
+      <button class="btn btn-primary btn-sm" onclick="addCustomVisitQuestion('${v.id}')" type="button">+ Add</button>
+    </div>
+    ${questionRows || '<p style="color:var(--ink-soft); font-size:13.5px; margin:0;">No questions added yet.</p>'}`;
+}
+
+function visitCareSnapshotHTML(){
+  const entries = STATE.checkinCache || [];
+  const summary = summarizeCheckinEntries(entries, 14);
+  return `
+    <div class="res-card" style="border-color:var(--ink);">
+      <div class="res-card-cat">Care snapshot — last 2 weeks</div>
+      ${checkinStatLineHTML(summary)}
+      ${!summary.n ? `<p style="font-size:12px; color:var(--ink-soft); margin:10px 0 0;">This fills in automatically once weekly check-ins are logged.</p>` : ''}
+    </div>`;
+}
+
+function visitListItemHTML(v){
+  const info = visitTypeInfo(v.type);
+  const askedCount = (v.questions || []).filter(q => q.asked).length;
+  return `
+    <div class="res-item" style="cursor:pointer;" onclick="openVisit('${v.id}')">
+      <div class="res-item-main">
+        <div class="rname">${info.icon} ${esc(info.label)} ${v.date ? '· ' + esc(v.date) : ''}
+          <span class="pill" style="background:${v.status === 'done' ? 'var(--sud-bg)' : 'var(--l2-bg)'}; color:${v.status === 'done' ? 'var(--sud)' : '#7a5a12'};">${v.status === 'done' ? 'Completed' : 'Upcoming'}</span>
+        </div>
+        <div class="rdesc">${(v.questions || []).length} question${(v.questions || []).length === 1 ? '' : 's'}${(v.questions || []).length ? ` · ${askedCount} asked` : ''}</div>
+      </div>
+    </div>`;
+}
+
+function renderVisitPrepList(){
+  const client = STATE.currentClient;
+  ensureVisitPrepShape();
+  const visits = STATE.formData.visits;
+  app.innerHTML = `
+    ${topbarHTML({ showSave: true, crumb: `${client.full_name} · Visit Prep` })}
+    <div class="wrap">
+      <button class="btn btn-ghost btn-sm" onclick="backToTrackPicker()">← ${STATE.viewerRole === 'client' ? 'Back' : esc(client.full_name) + "'s workbooks"}</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>Visit Prep</h1>
+        </div>
+      </div>
+      <p style="color:var(--ink-soft); font-size:14.5px; margin:-8px 0 18px;">Walk into an appointment ready — questions to ask, and a snapshot of how the last couple weeks have gone. Fill it out together before the visit, then come back after to log what happened.</p>
+
+      <div class="res-card">
+        <div class="res-card-cat">Start prepping for a visit</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          ${VISIT_TYPES.map(t => `<button class="btn btn-ghost btn-sm" onclick="addVisit('${t.key}')" type="button">${t.icon} ${t.label}</button>`).join('')}
+        </div>
+      </div>
+
+      ${visits.length ? `<div class="res-card">${visits.map(visitListItemHTML).join('')}</div>` : `<p style="color:var(--ink-soft); font-size:13.5px;">No visits yet — pick an appointment type above to start.</p>`}
+    </div>
+    ${siteFooterHTML()}`;
+}
+
+function renderVisitDetail(){
+  const client = STATE.currentClient;
+  const v = getCurrentVisit();
+  if (!v){ STATE.currentVisitId = null; renderVisitPrepList(); return; }
+  const info = visitTypeInfo(v.type);
+  app.innerHTML = `
+    ${topbarHTML({ showSave: true, crumb: `${client.full_name} · Visit Prep · ${info.label}` })}
+    <div class="wrap" id="visit-detail-main">
+      <button class="btn btn-ghost btn-sm" onclick="backToVisitList()">← All visits</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>${info.icon} ${esc(info.label)} visit</h1>
+        </div>
+      </div>
+
+      <div class="people-row" style="grid-template-columns:1fr 1fr; max-width:420px;">
+        <input class="answer" type="date" data-role="visit-field" data-vid="${v.id}" data-field="date" value="${esc(v.date || '')}">
+        <select data-role="visit-field" data-vid="${v.id}" data-field="status">
+          <option value="upcoming" ${v.status !== 'done' ? 'selected' : ''}>Upcoming</option>
+          <option value="done" ${v.status === 'done' ? 'selected' : ''}>Completed</option>
+        </select>
+      </div>
+
+      ${visitCareSnapshotHTML()}
+
+      <div class="res-card">
+        <div class="res-card-cat">What's been going on since the last visit?</div>
+        <textarea class="answer" placeholder="Notes to bring into the room — symptoms, concerns, questions that have been on your mind…" data-role="visit-field" data-vid="${v.id}" data-field="prep_notes">${esc(v.prep_notes || '')}</textarea>
+      </div>
+
+      <div class="res-card" style="border-color:var(--ink);">
+        <div class="res-card-cat">Questions to ask</div>
+        <div id="visit-q-section">${renderVisitQuestionsSection(v)}</div>
+      </div>
+
+      <div class="res-card">
+        <div class="res-card-cat">After the visit</div>
+        <div class="field"><label>What did they say?</label>
+          <textarea class="answer" data-role="visit-field" data-vid="${v.id}" data-field="summary_what_said">${esc(v.summary_what_said || '')}</textarea>
+        </div>
+        <div class="field"><label>Any changes made (medication, referral, plan)?</label>
+          <textarea class="answer" data-role="visit-field" data-vid="${v.id}" data-field="summary_changes">${esc(v.summary_changes || '')}</textarea>
+        </div>
+        <div class="field" style="max-width:220px;"><label>Follow-up date</label>
+          <input class="answer" type="date" data-role="visit-field" data-vid="${v.id}" data-field="summary_followup_date" value="${esc(v.summary_followup_date || '')}">
+        </div>
+        <div class="field"><label>Anything else worth remembering?</label>
+          <textarea class="answer" data-role="visit-field" data-vid="${v.id}" data-field="summary_notes">${esc(v.summary_notes || '')}</textarea>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; justify-content:space-between; margin-top:10px;">
+        <button class="btn btn-ghost btn-sm" onclick="removeVisit('${v.id}')" type="button">Remove this visit</button>
+        <button class="btn btn-ghost btn-sm" onclick="window.print()" type="button">🖨️ Print this page</button>
+      </div>
+    </div>
+    ${siteFooterHTML()}`;
+}
+
+function renderVisitPrepPage(){
+  ensureVisitPrepShape();
+  if (STATE.currentVisitId) renderVisitDetail();
+  else renderVisitPrepList();
+}
+</script>
+<script>
+/* =========================================================================
+   COPING SKILLS TOOLBOX — a running, ratable list of what actually helps.
+   A pinned Box Breathing exercise is always present. Every use (helped or
+   not) is logged, which doubles as the same kind of utilization evidence
+   as Weekly Check-In: "skill used and rated helpful N times."
+   ========================================================================= */
+const BREATHING_SKILL_ID = 'breathing';
+const BREATHE_PHASES = ['Breathe in…', 'Hold…', 'Breathe out…', 'Hold…'];
+let breatheTimer = null;
+
+function ensureToolboxShape(){
+  if (!STATE.formData.skills) STATE.formData.skills = [];
+  if (!STATE.formData.skills.find(s => s.id === BREATHING_SKILL_ID)){
+    STATE.formData.skills.unshift({
+      id: BREATHING_SKILL_ID,
+      name: 'Box Breathing',
+      notes: 'Breathe in for 4 counts, hold for 4, breathe out for 4, hold for 4. Repeat 4-6 times.',
+      pinned: true,
+      log: []
+    });
+  }
+}
+
+function newSkillId(){ return 'sk_' + Date.now() + '_' + Math.floor(Math.random()*1000); }
+
+function addSkill(){
+  ensureToolboxShape();
+  STATE.formData.skills.push({ id:newSkillId(), name:'', notes:'', log:[] });
+  queueSave();
+  renderToolboxPage();
+}
+
+function removeSkill(sid){
+  ensureToolboxShape();
+  STATE.formData.skills = STATE.formData.skills.filter(s => !(s.id === sid && !s.pinned));
+  queueSave();
+  renderToolboxPage();
+}
+
+function setSkillField(sid, field, value){
+  ensureToolboxShape();
+  const s = STATE.formData.skills.find(s => s.id === sid);
+  if (s) s[field] = value;
+  queueSave();
+}
+
+function logSkillUse(sid, helped){
+  ensureToolboxShape();
+  const s = STATE.formData.skills.find(s => s.id === sid);
+  if (!s) return;
+  if (!s.log) s.log = [];
+  s.log.push({ date: todayISO(), helped: !!helped });
+  queueSave();
+  renderToolboxPage();
+}
+
+function skillStatsHTML(s){
+  const log = s.log || [];
+  const n = log.length;
+  if (!n) return `<p style="font-size:12px; color:var(--ink-soft); margin:8px 0 0;">Not logged yet.</p>`;
+  const helpedN = log.filter(l => l.helped).length;
+  return `<p style="font-size:12px; color:var(--ink-soft); margin:8px 0 0;">Used ${n} time${n === 1 ? '' : 's'} · helped ${helpedN} of ${n} time${n === 1 ? '' : 's'}.</p>`;
+}
+
+function breathingWidgetHTML(){
+  return `
+    <div style="text-align:center; margin:14px 0;">
+      <div class="breathe-circle"></div>
+      <div class="breathe-label" id="breathe-label-text">Breathe in…</div>
+    </div>`;
+}
+
+function startBreathing(){
+  if (breatheTimer) return;
+  const label = document.getElementById('breathe-label-text');
+  if (!label) return; // toolbox page isn't showing right now
+  let i = 0;
+  label.textContent = BREATHE_PHASES[0];
+  breatheTimer = setInterval(() => {
+    i = (i + 1) % BREATHE_PHASES.length;
+    const el = document.getElementById('breathe-label-text');
+    if (el) el.textContent = BREATHE_PHASES[i];
+  }, 4000);
+}
+
+function stopBreathing(){
+  if (breatheTimer){ clearInterval(breatheTimer); breatheTimer = null; }
+}
+
+function renderSkillCard(s){
+  const isBreathing = s.id === BREATHING_SKILL_ID;
+  return `
+    <div class="res-card" style="${isBreathing ? 'border-color:var(--ink);' : ''}">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+        <div style="flex:1;">
+          ${isBreathing
+            ? `<div class="res-card-cat">Always here</div>
+               <div style="font-weight:700; font-size:15px;">🌬️ ${esc(s.name)}</div>
+               <p style="font-size:13px; color:var(--ink-soft); margin:4px 0 0;">${esc(s.notes)}</p>`
+            : `<input class="answer" type="text" placeholder="Name this skill (e.g. Call my sponsor, Go for a walk)" data-role="skill-field" data-sid="${s.id}" data-field="name" value="${esc(s.name)}" style="font-weight:700; margin-bottom:8px;">
+               <textarea class="answer" placeholder="What does doing this look like for you?" data-role="skill-field" data-sid="${s.id}" data-field="notes">${esc(s.notes)}</textarea>`}
+        </div>
+        ${!isBreathing ? `<button class="remove-person" onclick="removeSkill('${s.id}')" type="button">Remove</button>` : ''}
+      </div>
+      ${isBreathing ? breathingWidgetHTML() : ''}
+      <div style="display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap;">
+        <span style="font-size:13px; font-weight:600;">Used this — did it help?</span>
+        <button class="btn btn-ghost btn-sm" onclick="logSkillUse('${s.id}', true)" type="button">👍 Helped</button>
+        <button class="btn btn-ghost btn-sm" onclick="logSkillUse('${s.id}', false)" type="button">👎 Not this time</button>
+      </div>
+      ${skillStatsHTML(s)}
+    </div>`;
+}
+
+function renderToolboxPage(){
+  ensureToolboxShape();
+  const client = STATE.currentClient;
+  app.innerHTML = `
+    ${topbarHTML({ showSave: true, crumb: `${client.full_name} · Coping Skills Toolbox` })}
+    <div class="wrap">
+      <button class="btn btn-ghost btn-sm" onclick="backToTrackPicker()">← ${STATE.viewerRole === 'client' ? 'Back' : esc(client.full_name) + "'s workbooks"}</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>Coping Skills Toolbox</h1>
+        </div>
+      </div>
+      <p style="color:var(--ink-soft); font-size:14.5px; margin:-8px 0 18px;">A running list of things that actually help — build it together, and check in on what's working.</p>
+      ${STATE.formData.skills.map(renderSkillCard).join('')}
+      <button class="add-person-btn" onclick="addSkill()" type="button">+ Add a coping skill</button>
+    </div>
+    ${siteFooterHTML()}`;
+  startBreathing();
+}
+</script>
+<script>
+/* =========================================================================
+   ANXIETY & EXPOSURE LADDER — build a list of anxiety-provoking situations,
+   easiest to hardest, and log each attempt's before/during/after anxiety
+   (0-10). Watching the "during" number drop across attempts is the whole
+   point — real, earned evidence of progress, no badge required.
+   ========================================================================= */
+function ensureExposureShape(){
+  if (!STATE.formData.rungs) STATE.formData.rungs = [];
+  if (!STATE.formData.attempts) STATE.formData.attempts = [];
+}
+
+function newRungId(){ return 'r_' + Date.now() + '_' + Math.floor(Math.random()*1000); }
+function newAttemptId(){ return 'a_' + Date.now() + '_' + Math.floor(Math.random()*1000); }
+
+function addRung(){
+  ensureExposureShape();
+  STATE.formData.rungs.push({ id:newRungId(), situation:'', startAnxiety:5 });
+  queueSave();
+  renderExposurePage();
+}
+
+function removeRung(rid){
+  ensureExposureShape();
+  STATE.formData.rungs = STATE.formData.rungs.filter(r => r.id !== rid);
+  STATE.formData.attempts = STATE.formData.attempts.filter(a => a.rungId !== rid);
+  queueSave();
+  renderExposurePage();
+}
+
+function setRungField(rid, field, value){
+  ensureExposureShape();
+  const r = STATE.formData.rungs.find(r => r.id === rid);
+  if (!r) return;
+  r[field] = (field === 'startAnxiety') ? clampAnxiety(value) : value;
+  queueSave();
+}
+
+function moveRung(rid, dir){
+  ensureExposureShape();
+  const arr = STATE.formData.rungs;
+  const idx = arr.findIndex(r => r.id === rid);
+  const swapIdx = idx + dir;
+  if (idx < 0 || swapIdx < 0 || swapIdx >= arr.length) return;
+  const tmp = arr[idx]; arr[idx] = arr[swapIdx]; arr[swapIdx] = tmp;
+  queueSave();
+  renderExposurePage();
+}
+
+function clampAnxiety(value){
+  const n = Math.round(Number(value));
+  if (isNaN(n)) return 0;
+  return Math.max(0, Math.min(10, n));
+}
+
+function addAttempt(rungId){
+  ensureExposureShape();
+  STATE.formData.attempts.unshift({ id:newAttemptId(), rungId, date:todayISO(), before:5, during:5, after:5, notes:'' });
+  queueSave();
+  renderExposurePage();
+}
+
+function removeAttempt(aid){
+  ensureExposureShape();
+  STATE.formData.attempts = STATE.formData.attempts.filter(a => a.id !== aid);
+  queueSave();
+  renderExposurePage();
+}
+
+function setAttemptField(aid, field, value){
+  ensureExposureShape();
+  const a = STATE.formData.attempts.find(a => a.id === aid);
+  if (!a) return;
+  a[field] = ['before','during','after'].includes(field) ? clampAnxiety(value) : value;
+  queueSave();
+}
+
+function rungTrendHTML(rung){
+  const atts = (STATE.formData.attempts || [])
+    .filter(a => a.rungId === rung.id)
+    .slice()
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  if (!atts.length){
+    return `<p style="font-size:12px; color:var(--ink-soft); margin:8px 0 0;">No attempts logged yet.</p>`;
+  }
+  const first = atts[0], last = atts[atts.length - 1];
+  return `<p style="font-size:12px; color:var(--ink-soft); margin:8px 0 0;">First try: ${first.during}/10 anxiety during · Most recent: ${last.during}/10 · ${atts.length} attempt${atts.length === 1 ? '' : 's'} logged.</p>`;
+}
+
+function attemptRowHTML(a){
+  return `
+    <div style="border-top:1px solid var(--line); padding-top:10px; margin-top:10px;">
+      <div class="care-row" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+        <input class="answer" type="date" data-role="attempt-field" data-aid="${a.id}" data-field="date" value="${esc(a.date)}">
+        <div><label style="font-size:11px; color:var(--ink-soft); display:block;">Before</label><input type="number" min="0" max="10" class="answer" data-role="attempt-field" data-aid="${a.id}" data-field="before" value="${a.before}"></div>
+        <div><label style="font-size:11px; color:var(--ink-soft); display:block;">Highest during</label><input type="number" min="0" max="10" class="answer" data-role="attempt-field" data-aid="${a.id}" data-field="during" value="${a.during}"></div>
+        <div><label style="font-size:11px; color:var(--ink-soft); display:block;">After</label><input type="number" min="0" max="10" class="answer" data-role="attempt-field" data-aid="${a.id}" data-field="after" value="${a.after}"></div>
+      </div>
+      <textarea class="answer" style="margin-top:8px;" placeholder="What did you notice?" data-role="attempt-field" data-aid="${a.id}" data-field="notes">${esc(a.notes || '')}</textarea>
+      <div style="text-align:right; margin-top:4px;"><button class="remove-person" onclick="removeAttempt('${a.id}')" type="button">Remove this try</button></div>
+    </div>`;
+}
+
+function renderRungCard(rung, idx, total){
+  const attempts = (STATE.formData.attempts || [])
+    .filter(a => a.rungId === rung.id)
+    .slice()
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  return `
+    <div class="res-card">
+      <div style="display:flex; gap:10px; align-items:flex-start;">
+        <div style="display:flex; flex-direction:column; gap:2px;">
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;" ${idx === 0 ? 'disabled' : ''} onclick="moveRung('${rung.id}', -1)" type="button">↑</button>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px;" ${idx === total - 1 ? 'disabled' : ''} onclick="moveRung('${rung.id}', 1)" type="button">↓</button>
+        </div>
+        <div style="flex:1;">
+          <input class="answer" type="text" placeholder="A situation that brings up anxiety (start with something easier, work up)" data-role="rung-field" data-rid="${rung.id}" data-field="situation" value="${esc(rung.situation)}" style="font-weight:700; margin-bottom:8px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label style="font-size:12px; color:var(--ink-soft);">Guess — how hard will this feel (0-10)?</label>
+            <input type="number" min="0" max="10" class="answer" style="width:60px;" data-role="rung-field" data-rid="${rung.id}" data-field="startAnxiety" value="${rung.startAnxiety}">
+          </div>
+        </div>
+        <button class="remove-person" onclick="removeRung('${rung.id}')" type="button">Remove</button>
+      </div>
+      ${rungTrendHTML(rung)}
+      <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="addAttempt('${rung.id}')" type="button">+ Log a try</button>
+      ${attempts.map(attemptRowHTML).join('')}
+    </div>`;
+}
+
+function renderExposurePage(){
+  ensureExposureShape();
+  const client = STATE.currentClient;
+  const rungs = STATE.formData.rungs;
+  app.innerHTML = `
+    ${topbarHTML({ showSave: true, crumb: `${client.full_name} · Anxiety Ladder` })}
+    <div class="wrap">
+      <button class="btn btn-ghost btn-sm" onclick="backToTrackPicker()">← ${STATE.viewerRole === 'client' ? 'Back' : esc(client.full_name) + "'s workbooks"}</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>Anxiety Ladder</h1>
+        </div>
+      </div>
+      <p style="color:var(--ink-soft); font-size:14.5px; margin:-8px 0 18px;">Build a list of things that make you anxious, from easier to harder. Face them a little at a time, and watch what happens to the number.</p>
+      ${rungs.length ? rungs.map((r, i) => renderRungCard(r, i, rungs.length)).join('') : '<p style="color:var(--ink-soft); font-size:13.5px;">No rungs yet — add the first one below. Start with something that only feels a little uncomfortable.</p>'}
+      <button class="add-person-btn" onclick="addRung()" type="button">+ Add a step to the ladder</button>
+    </div>
+    ${siteFooterHTML()}`;
+}
+</script>
+<script>
+/* =========================================================================
+   THEN & NOW — a read-only comparison of the client's own answers, early
+   chapter vs. late chapter, within whichever track is currently open. No
+   new storage: this just reads two prompts already saved in formData.
+   ========================================================================= */
+const THEN_NOW_PAIRS_BASE = [
+  { earlyCh:'ch1', earlyPrompt:'why_change', lateCh:'ch3', latePrompt:'life_different', label:"Why you wanted this to change → How life is different now" },
+  { earlyCh:'ch1', earlyPrompt:'barriers', lateCh:'ch3', latePrompt:'keep_barriers', label:"What got in the way then → What could get in the way now" },
+  { earlyCh:'ch2', earlyPrompt:'kid_goals', lateCh:'ch3', latePrompt:'ltr_looks_like', label:"Old dreams and goals → What long-term recovery looks like now" }
+];
+// mh's chapter 1 uses a differently-named prompt id for the same question.
+const THEN_NOW_OVERRIDES = { mh: { why_change: 'why_now' } };
+
+function thenNowPairsForTrack(trackKey){
+  const overrides = THEN_NOW_OVERRIDES[trackKey] || {};
+  return THEN_NOW_PAIRS_BASE.map(p => ({
+    ...p,
+    earlyPrompt: overrides[p.earlyPrompt] || p.earlyPrompt
+  }));
+}
+
+function renderThenNowPage(){
+  const track = TRACKS[STATE.currentTrackKey];
+  const client = STATE.currentClient;
+  const pairs = thenNowPairsForTrack(track.key);
+  const rows = pairs.map(p => {
+    const early = getVal(p.earlyCh, p.earlyPrompt, '');
+    const late = getVal(p.lateCh, p.latePrompt, '');
+    const earlyFilled = String(early || '').trim().length > 0;
+    const lateFilled = String(late || '').trim().length > 0;
+    if (!earlyFilled && !lateFilled) return '';
+    const earlyChNum = track.chapters.find(c => c.id === p.earlyCh).num;
+    const lateChNum = track.chapters.find(c => c.id === p.lateCh).num;
+    return `
+      <div class="res-card">
+        <div class="res-card-cat">${esc(p.label)}</div>
+        <div class="thennow-grid">
+          <div>
+            <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; margin-bottom:4px;">Then — Chapter ${earlyChNum}</div>
+            <div style="font-size:14px; white-space:pre-wrap;">${earlyFilled ? esc(early) : '<span style="color:var(--ink-soft);">Not answered yet.</span>'}</div>
+          </div>
+          <div>
+            <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; margin-bottom:4px;">Now — Chapter ${lateChNum}</div>
+            <div style="font-size:14px; white-space:pre-wrap;">${lateFilled ? esc(late) : '<span style="color:var(--ink-soft);">Not answered yet.</span>'}</div>
+          </div>
+        </div>
+      </div>`;
+  }).filter(Boolean).join('');
+
+  app.innerHTML = `
+    ${topbarHTML({ showSave: false, crumb: `${client.full_name} · ${track.label} · Then & Now` })}
+    <div class="wrap">
+      <button class="btn btn-ghost btn-sm" onclick="closeWbTool()">← Back to workbook</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>Then &amp; Now</h1>
+        </div>
+      </div>
+      <p style="color:var(--ink-soft); font-size:14.5px; margin:-8px 0 18px;">Your own words, side by side — from earlier in this workbook and more recently. Fill in more chapters and this page fills in too.</p>
+      ${rows || '<p style="color:var(--ink-soft); font-size:13.5px;">Nothing to compare yet — answer a few more questions in Chapter 1 and Chapter 3 and this will fill in.</p>'}
+    </div>
+    ${siteFooterHTML()}`;
+}
+</script>
+<script>
+/* =========================================================================
+   LETTER TO MY FUTURE SELF — written early, opened whenever feels right.
+   Lives inside the same track's formData (no new storage) under a fixed
+   key rather than a chapter id, so it survives independent of chapter
+   content changes.
+   ========================================================================= */
+function ensureLetterShape(){
+  if (STATE.formData.futureLetter === undefined) STATE.formData.futureLetter = null;
+}
+
+function saveLetterDraft(text){
+  ensureLetterShape();
+  if (!STATE.formData.futureLetter) STATE.formData.futureLetter = { text:'', dateWritten:'', revealed:false };
+  STATE.formData.futureLetter.text = text;
+  queueSave();
+}
+
+function sealLetter(){
+  const ta = document.getElementById('letter-draft');
+  if (!ta || !ta.value.trim()){ toast('Write something first.'); return; }
+  STATE.formData.futureLetter = { text: ta.value, dateWritten: todayISO(), revealed:false };
+  queueSave();
+  renderLetterPage();
+}
+
+function revealLetter(){
+  ensureLetterShape();
+  if (STATE.formData.futureLetter) STATE.formData.futureLetter.revealed = true;
+  queueSave();
+  renderLetterPage();
+}
+
+function rewriteLetter(){
+  STATE.formData.futureLetter = null;
+  queueSave();
+  renderLetterPage();
+}
+
+function renderLetterPage(){
+  ensureLetterShape();
+  const client = STATE.currentClient;
+  const letter = STATE.formData.futureLetter;
+  let bodyHTML;
+
+  if (!letter || !letter.dateWritten){
+    const draftText = letter ? letter.text : '';
+    bodyHTML = `
+      <div class="res-card" style="border-color:var(--ink);">
+        <div class="res-card-cat">Write a letter to your future self</div>
+        <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 12px;">What do you want to remember? What do you hope for? What do you want future you to know? Seal it, and come back to it whenever you're ready.</p>
+        <textarea class="answer" id="letter-draft" data-role="letter-draft" style="min-height:160px;" placeholder="Dear me,">${esc(draftText)}</textarea>
+        <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="sealLetter()" type="button">✉️ Seal this letter</button>
+      </div>`;
+  } else if (!letter.revealed){
+    bodyHTML = `
+      <div class="res-card" style="border-color:var(--ink); text-align:center; padding:30px 18px;">
+        <div style="font-size:38px; margin-bottom:10px;">✉️</div>
+        <p style="font-size:14.5px; margin:0 0 4px;">You wrote yourself a letter on ${esc(letter.dateWritten)}.</p>
+        <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px;">Open it whenever feels right — no rush.</p>
+        <button class="btn btn-primary btn-sm" onclick="revealLetter()" type="button">Open the letter</button>
+      </div>`;
+  } else {
+    bodyHTML = `
+      <div class="res-card" style="border-color:var(--ink);">
+        <div class="res-card-cat">Written ${esc(letter.dateWritten)}</div>
+        <div style="font-size:14.5px; white-space:pre-wrap; line-height:1.6;">${esc(letter.text)}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="rewriteLetter()" type="button">Write a new letter</button>`;
+  }
+
+  app.innerHTML = `
+    ${topbarHTML({ showSave: true, crumb: `${client.full_name} · Letter to My Future Self` })}
+    <div class="wrap">
+      <button class="btn btn-ghost btn-sm" onclick="closeWbTool()">← Back to workbook</button>
+      <div class="page-head" style="margin-top:14px;">
+        <div>
+          <div class="eyebrow">${esc(client.full_name)}</div>
+          <h1>Letter to My Future Self</h1>
+        </div>
+      </div>
+      ${bodyHTML}
+    </div>
+    ${siteFooterHTML()}`;
+}
+</script>
+<script>
+/* =========================================================================
    PROMPT RENDERERS — one HTML builder per prompt type
    ========================================================================= */
 function speakBtnHTML(text){
@@ -1900,6 +2899,8 @@ function renderWorkbook(){
           <div class="chapter-nav">${navHTML}</div>
           <div class="wb-tools">
             <button class="btn btn-ghost btn-sm" onclick="openResources()">📋 My Resources &amp; My People</button>
+            <button class="btn btn-ghost btn-sm" onclick="openThenNow()">🔍 Then &amp; Now</button>
+            <button class="btn btn-ghost btn-sm" onclick="openLetter()">✉️ Letter to My Future Self</button>
             <button class="btn btn-ghost btn-sm" onclick="exportChapterPDF()">⬇ Export this chapter (PDF)</button>
             <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨 Print</button>
             <button class="btn btn-ghost btn-sm" onclick="saveProgressNow(); toast('Saved.')">💾 Save now</button>
@@ -1988,6 +2989,8 @@ const FOUNDATION_CELEBRATIONS = [
 
 function backToTrackPicker(){
   STATE.currentTrackKey = null;
+  STATE.currentVisitId = null;
+  STATE.wbTool = null;
   render();
 }
 
@@ -2026,6 +3029,46 @@ function handleGlobalInputOrChange(e){
   }
   if (role === 'resource-check'){
     setResourceShared(t.dataset.resid, t.checked);
+    return;
+  }
+  if (role === 'checkin-field'){
+    setCheckinField(t.dataset.eid, t.dataset.field, t.value);
+    return;
+  }
+  if (role === 'checkin-check'){
+    setCheckinCheck(t.dataset.eid, t.dataset.item, t.checked);
+    return;
+  }
+  if (role === 'visit-field'){
+    setVisitField(t.dataset.vid, t.dataset.field, t.value);
+    if (t.dataset.field === 'status'){
+      // Status changes the Completed/Upcoming pill on the list view — just
+      // update local data here; no full re-render needed while on this page.
+    }
+    return;
+  }
+  if (role === 'visit-q-check'){
+    toggleVisitQuestionAsked(t.dataset.vid, t.dataset.qid, t.checked);
+    return;
+  }
+  if (role === 'visit-q-text'){
+    setVisitQuestionText(t.dataset.vid, t.dataset.qid, t.value);
+    return;
+  }
+  if (role === 'skill-field'){
+    setSkillField(t.dataset.sid, t.dataset.field, t.value);
+    return;
+  }
+  if (role === 'rung-field'){
+    setRungField(t.dataset.rid, t.dataset.field, t.value);
+    return;
+  }
+  if (role === 'attempt-field'){
+    setAttemptField(t.dataset.aid, t.dataset.field, t.value);
+    return;
+  }
+  if (role === 'letter-draft'){
+    saveLetterDraft(t.value);
     return;
   }
 
